@@ -1,0 +1,336 @@
+---
+title: "Colorado Transportation Sector and Electric Vehicle Policy Impacts"
+author: "JP Furman"
+format: 
+  html:
+    embed-resources: true
+editor: visual
+---
+
+
+## Introduction
+
+This report explores how Colorado’s transportation sector—specifically the trucking and passenger transit industries—has evolved in relation to state-level energy use and electric vehicle (EV) policy initiatives. Using GDP data segmented by NAICS codes 484 (Trucking) and 485 (Passenger Transit), alongside energy consumption data from the U.S. EIA, we analyze changes from 1997 through 2023. Further, legislative events are also considered to assess their alignment with observed trends.
+
+## Data Overview
+
+### Datasets Used
+
+1. **GDP by Industry (NAICS 484 and 485)**
+
+   * **Source**: Federal Reserve Bank of St. Louis (FRED)
+   * **URL**: [https://fred.stlouisfed.org/series/COTRANGRNDTRANRGSP](https://fred.stlouisfed.org/series/COTRANGRNDTRANRGSP)
+   * **Unit of Observation**: Annual GDP (in millions USD) by NAICS code and state (Colorado) & Real GDP
+   * **Years Covered**: 1997–2023
+   * **Variables**: `year`, `datavalue` (GDP), `industryid`, `description`
+
+2. **State-Level Transportation Industry Energy Consumption**
+
+   * **Source**: U.S. Energy Information Administration (EIA)
+   * **URL**: [https://www.eia.gov/state/seds/](https://www.eia.gov/state/seds/)
+   * **Unit of Observation**: Annual consumption in Billion Btu, by energy type and sector (Transportation, Colorado)
+   * **Years Covered**: 1997–2023
+   * **Variables**: `series_id`, `series_description`, `value`, `period`
+   
+3. **State Legislation for Renewables and Efficiency**
+
+   * **Source**: Database of State Incentives for Renewables and Efficiency (DSIRE)
+   * **URL**: [https://www.eia.gov/state/seds/](https://www.eia.gov/state/seds/)
+   * **Unit of Observation**: Legislation Codes by state and category (Transportation, Colorado)
+   * **Years Covered**: 2001–2023
+   * **Variables**: `Name`, `Category`, `Type`, `Created`, `Updated`
+   
+### Selected Variables for Analysis
+
+* `trucking_gdp` — GDP for NAICS 484 (Trucking)
+* `passenger_gdp` — GDP for NAICS 485 (Passenger Transit)
+* `electricity_btus`, `gasoline_btus`, `diesel_btus`, `natgas_btus` — key transportation energy consumption sources
+* `year` — calendar date for time series analysis
+* `Name` - legislation name
+* `Created` - date legislation was signed 
+
+These variables allow us to study trends in transportation output and energy use, and to observe how state policies may relate to changes in these metrics. A question that one may ask of the implementation of EV's into the transportation industry is: How does this new type of competition economically impact the industry?
+
+```{r}
+#| echo: false
+#| warning: false
+
+library(tidyverse, quietly = TRUE)
+library(jsonlite, quietly = TRUE)
+library(janitor, quietly = TRUE)
+library(scales, quietly = TRUE)
+
+gdp_trucking <- read_csv("COTRUCKTRANNGSP.csv", show_col_types = FALSE) %>% clean_names()
+realgdp_trucking <- read_csv("COTRUCKTRANRGSP.csv", show_col_types = FALSE) %>% clean_names() ## Load in Real GDP
+gdp_passenger <- read_csv("COTRANGRNDTRANNGSP.csv", show_col_types = FALSE) %>% clean_names()
+realgdp_passenger <- read_csv("COTRANGRNDTRANRGSP.csv", show_col_types = FALSE) %>% clean_names() ## Load in Real GDP
+
+gdp_trucking_clean <- gdp_trucking %>%
+  mutate(year = as.Date(`observation_date`, "%Y"), trucking_gdp = as.integer(`cotrucktranngsp`))%>% 
+  select(year, trucking_gdp)
+
+gdp_passenger_clean <- gdp_passenger %>%
+  mutate(year = as.Date(`observation_date`, "%Y"), trucking_gdp = as.integer(`cotrangrndtranngsp`))%>%
+  select(year, passenger_gdp = contains("gdp"))
+
+# Merge GDP datasets by year
+gdp_data <- full_join(gdp_trucking_clean, gdp_passenger_clean, by = "year")
+
+
+realgdp_trucking_clean <- realgdp_trucking %>%
+  mutate(year = as.Date(`observation_date`, "%Y"), trucking_gdp = as.integer(`cotrucktranrgsp`))%>% ## Change for gdp
+  select(year, trucking_gdp)
+
+realgdp_passenger_clean <- realgdp_passenger %>%
+  mutate(year = as.Date(`observation_date`, "%Y"), trucking_gdp = as.integer(`cotrangrndtranrgsp`))%>% ## Change for gdp
+  select(year, passenger_gdp = contains("gdp"))
+
+# Merge GDP datasets by year
+gdp_data <- full_join(gdp_trucking_clean, gdp_passenger_clean, by = "year")
+
+real_gdp <- full_join(realgdp_trucking_clean, realgdp_passenger_clean, "year")
+
+
+## EIA
+
+# Read EIA JSON file
+eia_raw <- fromJSON("CO48Consumption.json")
+
+# Extract main content
+eia_data <- eia_raw$response$data
+
+# Convert to tibble and clean
+eia_tidy <- as_tibble(eia_data) %>%
+  clean_names() %>%
+  mutate(value = as.numeric(value)) %>%
+  select(year = period, series_id, series_description = series_description, value, unit)
+
+# Select Variables of interest
+selected_series <- c("ESACB", "MGACB", "DFACB", "NGACB", "PAACB")
+
+energy_filtered <- eia_tidy %>%
+  filter(series_id %in% selected_series) %>%
+  select(year, series_id, value) %>%
+  pivot_wider(names_from = series_id, values_from = value)
+
+# Rename columns for readability
+energy_data <- energy_filtered %>%
+  rename(
+    electricity_btus = ESACB,
+    gasoline_btus = MGACB,
+    diesel_btus = DFACB,
+    natgas_btus = NGACB,
+    total_petroleum_btus = PAACB
+  )%>%
+  mutate(year_date = as.Date(paste0(year, "-01-01"))) ## have to specify 01-01 to match gdp date
+
+# merge data
+combined_data <- full_join(real_gdp, energy_data, by = c("year" = "year_date")) %>%
+  select(year,  # keep the GDP's version of date
+         trucking_gdp, passenger_gdp,
+         electricity_btus, gasoline_btus,
+         diesel_btus, natgas_btus, total_petroleum_btus)
+
+# pivot to longer 
+energy_long <- combined_data %>%
+  select(year, electricity_btus, gasoline_btus, diesel_btus, natgas_btus) %>%
+  pivot_longer(cols = -year, names_to = "energy_type", values_to = "btus") %>%
+  mutate(energy_type = recode(energy_type,
+                              "electricity_btus" = "Electricity",
+                              "gasoline_btus" = "Motor Gasoline",
+                              "diesel_btus" = "Diesel",
+                              "natgas_btus" = "Natural Gas"))
+```
+
+## GDP for NAICS Coded Categories
+Collecting the Gross Domestic Product (GDP) for two sectors of the Transportation industry allows us to get a glimpse of the distinction that occurs as the industry is subdivided into sectors. NAICS code 48 is the classification for all Transportation activity, which is further broken down into subsectors, two of which are related to road vehicles.
+
+```{r, fig.width =10}
+#| echo: false
+gdp_plot <- ggplot(gdp_data, aes(x = year)) +
+  geom_line(aes(y = trucking_gdp, color = "Trucking (NAICS 484)"), linewidth = 1.2) +
+  geom_line(aes(y = passenger_gdp, color = "Passenger Transit (NAICS 485)"), linewidth = 1.2) +
+  scale_color_manual(values = c("Trucking (NAICS 484)" = "#1f77b4", "Passenger Transit (NAICS 485)" = "#ff7f0e")) +
+  scale_y_continuous(labels = dollar_format(scale = 1e-3, suffix = "B")) +
+  labs(
+    title = "Gross GDP of Colorado Transportation Sub-Sectors (1997–2023)",
+    subtitle = "Economic output by NAICS codes 484 (Trucking) and 485 (Transit)",
+    x = NULL,
+    y = "GDP (Billions of USD)",
+    color = "Sector"
+  ) +
+  theme_minimal(base_size = 14)
+
+gdp_plot
+```
+
+These two sectors reflect the distinct parts of the transportation economy containing road vehicles. NAICS 484 corresponds to freight and long-haul trucking, while NAICS 485 represents public and private passenger transportation systems, including buses and shuttles. Tracking their GDP over time shows us the scale and direction of sectoral growth. There is clearly a distinction between the two in terms of growth and absolute value of their weights in the transportation industry.
+
+## Real GDP for NAICS Coded Categories
+
+Real GDP adjusts for inflation and presents a more accurate picture of growth or contraction. By removing the effects of price changes, it allows us to better assess the actual output and economic transformation of these transportation subsectors over time. Taking a look at the previous graph will help us to better understand the current significance of both sectors.
+
+
+```{r, fig.width=10}
+#| echo: false
+realgdp_plot <- ggplot(real_gdp, aes(x = year)) +
+  geom_line(aes(y = trucking_gdp, color = "Trucking (NAICS 484)"), linewidth = 1.2) +
+  geom_line(aes(y = passenger_gdp, color = "Passenger Transit (NAICS 485)"), linewidth = 1.2) +
+  scale_color_manual(values = c("Trucking (NAICS 484)" = "#1f77b4", "Passenger Transit (NAICS 485)" = "#ff7f0e")) +
+  scale_y_continuous(labels = dollar_format(scale = 1e-3, suffix = "B")) +
+  labs(
+    title = "Real GDP of Colorado Transportation Sub-Sectors (1997–2023)",
+    subtitle = "Economic output by NAICS codes 484 (Trucking) and 485 (Transit)",
+    x = NULL,
+    y = "GDP (Billions of USD)",
+    color = "Sector"
+  ) +
+  theme_minimal(base_size = 14)
+
+realgdp_plot
+```
+Compared to the Gross GDP graph from above, the Real GDP chart shows a more accurate depiction of the trends of the most recent years. Here it can be seen that the decline in Trucking GDP started prior to 2023, which is not able to be seen when examining the Gross GDP chart. Just looking at this time-series graph, one may wonder what happened around 2020 that caused the GDP growths to flip for these sectors. To explore some intentional events that could have caused this change, turning to state legislation changes can provide some insights.
+
+## State Incentives and Regulations
+From the Database of State Incentives for Renewables and Efficiency (DSIRE), all state policies related to Colorado's efforts to transform its state to more efficient and clean forms of energy consumption and production can be found. This source provides a great overview of what policies exist and brief descriptions, but one issue with the database is that the policy details are nested to another url [https://programs.dsireusa.org/system/program/detail/22156/electric-vehicle-income-tax-credit](Dsire Program Interview) beyond the original access point. Regardless, the policy name, categorical variables, and created variables can be used to join these with the GDP data from above.
+
+
+```{r, echo =FALSE}
+dsire <- read_csv("DSIRE_Policies.csv", show_col_types = FALSE)%>% clean_names()
+
+dsire_labeled <- dsire%>%  ## Add in keyword filters
+  mutate(`split` = str_split(`name`, " - "),
+         `case` = `split` == `name`,
+         `entity` = if_else(`case` == TRUE, "NA", str_split_i(`name`, " - ", 1)),
+         `name` = if_else(`case` == TRUE,`name`,str_split_i(`name`, " - ", 2)))%>%
+  select(-c(`split`, `case`))%>%
+  mutate(label = case_when((str_detect(`name`, "EV") | str_detect(`name`, "Transportation") | str_detect(`name`, "Fuel") | str_detect(`name`,"Vehicle") | str_detect(`name`, "Automobile"))~ "Transportation",
+                           (str_detect(`name`, "Solar") | str_detect(`name`, "PV"))~ "Solar",
+                           str_detect(`name`, "Renewable") ~ "Renewable",
+                           str_detect(`name`, "Storage") ~ "Storage",
+                           str_detect(`name`, "Efficiency") ~ "Efficiency",
+                           (str_detect(`name`, "Buidling") | str_detect(`name`, "Property") | str_detect(`name`, "Home")) ~ "Real Estate",
+                           str_detect(`name`, "Sustainable") ~ "Sustainability",
+                           str_detect(`name`, "Wind") ~ "Wind",
+                           str_detect(`name`, "Clean Energy") ~ "Clean Energy",
+                           str_detect(`name`, "Hydrogen") ~ "Hydrogen",
+                           (str_detect(`name`, "Infrastructure") | str_detect(`name`, "Interconnection") | str_detect(`name`, "Grid"))~ "Infrastructure",
+                           .default = "Other"))
+
+co_policies <- dsire_labeled%>%
+  filter(`state_territory` == "CO")%>%
+  select(c("name", "category", "type", "created", "updated", "label"))
+
+co_transp_leg <- co_policies%>%
+  filter(`label` == "Transportation")%>%
+  select(-label)
+```
+After collecting the incentives and regulations for Colorado, keywords can be used to filter to data for programs related to the transportation industry. Of the 100 policies available from Colorado, there are 8 policies related to Electric Vehicles and Transportation.
+
+Including the `created` date field for these policies into our gdp graphs can give use some further insight.
+
+### Real GDP Graph (with events)
+
+```{r, fig.width = 10}
+#| echo: false
+#| warning: false
+realgdp_plot +
+  geom_vline(data = co_transp_leg, aes(xintercept = created), linetype = "dashed", color = "gray50") +
+  annotate("text", x = as.Date("2021-05-21"), y = max(real_gdp$passenger_gdp, na.rm = TRUE),
+           label = "2021 EV Incentives Begin", angle = 90, vjust = -0.5, hjust = 0, size = 3, color = "gray40")+
+  annotate("text", x = as.Date("2001-11-30"), y = max(combined_data$passenger_gdp, na.rm = TRUE),
+           label = "2001: Fuel Mix Regulation Begins", angle = 90, vjust = -0.5, hjust = 0.5, size = 3, color = "gray30")
+```
+While it is arguable if the introduction of the Fuel Mix Regulation had any impact, it does appear that the introduction of EV incentives in 2021 could have caused the respective growth and decline in the Passenger and Trucking sectors. This is just a glimpse into what these incentives could have caused. To take another approach, energy data from the Energy Information Administration (EIA) can be examined to bring more light into this topic.
+
+## Energy Mix in Transportation
+
+Using the State Energy Data System (SEDS) from the EIA, variables related to energy consumption, production, expenditures, and price can be collected. For this demonstration, data on energy consumption patterns were collected for the state of Colorado using the EIA SEDS [https://www.eia.gov/opendata/browser/seds](API). 
+
+
+```{r, fig.width=10}
+#| echo: false
+energy_plot <- ggplot(energy_long, aes(x = year, y = btus, color = energy_type)) +
+  geom_line(linewidth = 1.2) +
+  scale_color_brewer(palette = "Set2") +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title = "Energy Consumption by Source in Colorado’s Transportation Sector",
+    subtitle = "Measured in Billion Btu (1997–2023)",
+    x = NULL,
+    y = "Energy Use (Billion Btu)",
+    color = "Energy Type"
+  ) +
+  theme_minimal(base_size = 14)+
+  geom_vline(data = co_transp_leg, aes(xintercept = created), linetype = "dashed", color = "gray50") +
+  annotate("text", x = as.Date("2021-05-21"), y = 125000,
+           label = "2021 EV Incentives Begin", angle = 90, vjust = -0.5, hjust = 0, size = 3, color = "gray40")+
+  annotate("text", x = as.Date("2001-11-30"), y = 150000,
+           label = "2001: Fuel Mix Regulation Begins", angle = 90, vjust = -0.5, hjust = 0.5, size = 3, color = "gray30")
+
+energy_plot
+```
+
+This graph of energy consumption in the transportation sector provides insight into the fuel types powering Colorado's mobility. Traditional fuels like gasoline and diesel dominate, but electricity and natural gas show subtle growth—potential early signals of vehicle electrification; however looking at the data as such does not easily provide insight into the change of lower usage fuel types such as electricity.
+
+## Transform Energy Mix Graph to Indexed Format (2021 = 100)
+
+
+```{r, fig.width=10}
+#| echo: false
+#| warning: false
+library(gganimate)
+
+# Set 2021 as base year for indexing
+base_year <- as.Date("2021-01-01")
+
+energy_indexed <- combined_data %>%
+  filter(!is.na(electricity_btus)) %>%
+  select(year, electricity_btus, gasoline_btus, diesel_btus, natgas_btus) %>%
+  pivot_longer(-year, names_to = "energy_type", values_to = "btus") %>%
+  group_by(energy_type) %>%
+  mutate(
+    base_value = btus[year == base_year],
+    indexed_value = (btus / base_value) * 100
+  ) %>%
+  ungroup() %>%
+  mutate(energy_type = recode(energy_type,
+                              "electricity_btus" = "Electricity",
+                              "gasoline_btus" = "Motor Gasoline",
+                              "diesel_btus" = "Diesel",
+                              "natgas_btus" = "Natural Gas"))
+
+ggplot(energy_indexed, aes(x = year, y = indexed_value, color = energy_type)) +
+  geom_line(linewidth = 1.2) +
+  geom_vline(xintercept = base_year, linetype = "dashed", color = "gray50") +
+  geom_hline(yintercept = 100, linetype = "solid", color = "black")+
+  scale_y_continuous(labels = scales::label_number(accuracy = 1)) +
+  scale_color_brewer(palette = "Set2") +
+  transition_manual(
+    frames = energy_type
+  )+
+  labs(
+    title = "Indexed Energy Consumption Since Colorado EV Incentives (2021)",
+    subtitle = "Each line shows change relative to 2021 = 100",
+    y = "Indexed Energy Use (2021 = 100)",
+    x = NULL,
+    color = "Energy Source",
+    caption = "This is a animated gif. Please allow time to view each energy type."
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+This visualization presents another angle to look at energy consumption in the transportation industry. By creating an index with a base year of 2021 for each energy type, their patterns can be studied comparative to itself across the time frame. If the line is above the solid line, the consumption in the corresponding year is greater than the consumption in 2021, below means it is less than the 2021 value. This change allows better visualization into the patterns of consumption in Colorado by energy type. The year 2021 was chosen to align with the introduction of the EV Incentive policies.
+
+
+In this animation, two interesting points stand out. 1 - the consistent consumption of motor gasoline, along with the steady growth of electricity and diesel; which leads to 2 - the introduction of EV incentives does not seem to be having too large of an impact on these shares. While it could be that not enough time has elapsed to show significant gains for electricity, it is interesting to see the peak of its energy usage occuring in 2019. It is possible that the Transportation industry is still rebounding from the COVID recession and that more years of data will need to be collected to see effects, but it also could be the result of not being able to segment the EIA data between trucking and passenger transportation. 
+
+
+## Next Steps
+
+With the collection of the data from the FRED, EIA, and DSIRE, a few visualization were made to showcase the data as it came, with minimal analytical process. As explained, these datasets are somewhat interesting in solidarity, but their real value lies in combining them into a wholistic view of the transportation industry. This can and was done easily behind the scenes through a series of joins and pivots using the time oriented variable of the datasets. But while these can be combined as is, more data would need to be collected to find useful insights into where change is occuring from these incentives in the economy. The GDP datasets show promise in relation to the DSIRE events, but more sifting into the EIA's data and possibly elsewhere for vehicle registration or transportation infrastructure could also provide useful variables to accompany what was initially collected here.
+
+## Conclusion
+
+This exploratory analysis shows that policy interventions can be aligned early signals of change in transportation-sector GDP and possibly energy consumption patterns. While causality cannot yet be established, the groundwork is now laid for a deeper investigation. With the addition of more variables, further modeling could test whether these legislative milestones significantly influenced electrification and economic output shifts.
+
