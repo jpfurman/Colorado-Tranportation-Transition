@@ -245,7 +245,7 @@ While it is arguable if the introduction of the Fuel Mix Regulation had any impa
 
 ## Energy Mix in Transportation
 
-Using the State Energy Data System (SEDS) from the EIA, variables related to energy consumption, production, expenditures, and price can be collected. For this demonstration, data on energy consumption patterns were collected for the state of Colorado using the EIA SEDS [https://www.eia.gov/opendata/browser/seds](API). 
+Using the State Energy Data System (SEDS) from the EIA, variables related to energy consumption, production, expenditures, and price can be collected. For this demonstration, data on energy consumption patterns were collected for the state of Colorado using the EIA SEDS [API](https://www.eia.gov/opendata/browser/seds). 
 
 
 ```{r, fig.width=10}
@@ -333,4 +333,6 @@ With the collection of the data from the FRED, EIA, and DSIRE, a few visualizati
 ## Conclusion
 
 This exploratory analysis shows that policy interventions can be aligned early signals of change in transportation-sector GDP and possibly energy consumption patterns. While causality cannot yet be established, the groundwork is now laid for a deeper investigation. With the addition of more variables, further modeling could test whether these legislative milestones significantly influenced electrification and economic output shifts.
+
+Please visit the [GitHub page](https://github.com/jpfurman/Colorado-Tranportation-Transition.git) for information related to this file code and its accompanying data.
 
